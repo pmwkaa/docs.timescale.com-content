@@ -55,7 +55,9 @@
 > - [time_bucket](#time_bucket)
 > - [time_bucket_gapfill](#time_bucket_gapfill)
 > - [timescaledb_information.data_node](#timescaledb_information-data_node)
-> - [timescaledb_information.hypertable](#timescaledb_information-hypertable)
+> - [timescaledb_information.hypertables](#timescaledb_information-hypertables)
+> - [timescaledb_information.chunks](#timescaledb_information-chunks)
+> - [timescaledb_information.dimensions](#timescaledb_information-dimensions)
 > - [timescaledb_information.license](#timescaledb_information-license)
 > - [timescaledb_information.compressed_chunk_stats](#timescaledb_information-compressed_chunk_stats)
 > - [timescaledb_information.compressed_hypertable_stats](#timescaledb_information-compressed_hypertable_stats)
@@ -2654,12 +2656,11 @@ SELECT * FROM timescaledb_information.data_node;
 (2 rows)
 ```
 
-## timescaledb_information.hypertable [](timescaledb_information-hypertable)
+## timescaledb_information.hypertables [](timescaledb_information-hypertables)
 
-Get information about hypertables. If the hypertable is distributed, the
-hypertable statistics reflect the sum of statistics across all distributed chunks.
+Get metadata information about hypertables.
 
-#### Available Columns [](timescaledb_information-hypertable-available-columns)
+#### Available Columns [](timescaledb_information-hypertables-available-columns)
 
 |Name|Description|
 |---|---|
@@ -2668,52 +2669,126 @@ hypertable statistics reflect the sum of statistics across all distributed chunk
 | `table_owner` | Owner of the hypertable. |
 | `num_dimensions` | Number of dimensions. |
 | `num_chunks` | Number of chunks. |
-| `table_size` |Disk space used by hypertable |
-| `index_size` |Disk space used by indexes|
-| `toast_size` |Disk space of toast tables|
-| `total_size` |Total disk space used by the specified table, including all indexes and TOAST data|
-| `distributed` | (BOOLEAN) Distributed status of the hypertable |
+| `compression_enabled` |Is compression enabled on the hypertable?|
+| `is_distributed` | Is the hypertable distributed?|
+| `replication_factor` | Replication factor for a distributed hypertable.|
+| `data_nodes` | Nodes on which hypertable is distributed.|
+| `tablespaces` |Tablespaces attached to the hypertable. |
 
-#### Sample Usage [](timescaledb_information-hypertable-examples)
+#### Sample Usage [](timescaledb_information-hypertables-examples)
 
-Get information about all hypertables.
+Get information about a hypertable.
 
 ```sql
-SELECT * FROM timescaledb_information.hypertable;
+CREATE TABLE dist_table(time timestamptz, device int, temp float);
+SELECT create_distributed_hypertable('dist_table', 'time', 'device', replication_factor => 2);
 
- table_schema | table_name | table_owner | num_dimensions | num_chunks | table_size | index_size | toast_size | total_size | distributed
---------------+------------+-------------+----------------+------------+------------+------------+------------+------------+--------------
- public       | metrics    | postgres    |              1 |          5 | 99 MB      | 96 MB      |            | 195 MB     | t
- public       | devices    | postgres    |              1 |          1 | 8192 bytes | 16 kB      |            | 24 kB      | f
+SELECT * FROM timescaledb_information.hypertables
+WHERE table_name = 'dist_table';
+ table_schema | table_name |    owner    | num_dimensions | num_chunks | compression_enabled | is_distributed | replication_factor |              data_nodes               | tablespaces
+--------------+------------+-------------+----------------+------------+---------------------+----------------+--------------------+---------------------------------------+-------------
+ public       | dist_table | postgres    |              2 |          3 | f                   | t              |                  2 | {node_1,node_2,node_3}     |
+(1 row)
+```
+
+## timescaledb_information.dimensions [](timescaledb_information-dimensions)
+
+Get metadata about the dimensions of hypertables.
+The primary dimension of a hypertable is time based.
+The time_interval column is set for hypertables that use date/time datatypes, like timestamp, data etc., for the primary dimension.
+The integer_interval and integer_now_func columns are set for hypertables that use integer datatypes, like bigint, integer etc., for the primary dimension.
+Secondary dimensions are space based and have num_partitions set. The time_interval and integer_interval columns are not applicable to secondary dimensions.
+ 
+#### Available Columns [](timescaledb_information-dimensions-available-columns)
+
+|Name|Description|
+|---|---|
+| `hypertable_schema` | Schema name of the hypertable. |
+| `hypertable_name` | Table name of the hypertable. |
+| `dimension_number` | Dimension number of the hypertable, starting from 1 |
+| `column_name` | Name of the column used to create this dimension. |
+| `column_type` | Type of the column used to create this dimension.|
+| `dimension_type` |Is this time based or space based dimension?|
+| `time_interval` | Time interval for primary dimension if the column type is based on Postgres time datatypes. |
+| `integer_interval` | Integer interval for primary dimension if the column type is an integer datatype. |
+| `integer_now_func` | integer_now function for primary dimension if the column type is integer based datatype.|
+| `num_partitions` | Number of partitions for the dimension. |
+
+#### Sample Usage [](timescaledb_information-dimensions-examples)
+
+Get information about the dimensions of hypertables.
+
+```sql
+CREATE TABLE dist_table(time timestamptz, device int, temp float);
+SELECT create_hypertable('dist_table', 'time',  'device', chunk_time_interval=> INTERVAL '7 days', number_partitions=>3);
+
+SELECT * from timescaledb_information.dimensions
+ORDER BY hypertable_name, dimension_number;
+ hypertable_schema | hypertable_name | dimension_number | column_name |       column_type        | dimension_type | time_interval | integer_interval | integer_now_func | num_partitions
+-------------------+-----------------+------------------+-------------+--------------------------+----------------+---------------+------------------+------------------+----------------
+ public            | dist_table      |                1 | time        | timestamp with time zone | Time           | @ 7 days      |                  |                  |
+ public            | dist_table      |                2 | device      | integer                  | Space          |               |                  |                  |              3
 (2 rows)
 ```
 
-Check whether a table is a hypertable.
+## timescaledb_information.chunks [](timescaledb_information-chunks)
+
+Get metadata about the chunks of hypertables.
+This view shows metadata for the chunk's primary dimension.
+range_start_integer and range_end_integer are set if the type of the primary dimension type is integer based.
+range_start and range_end are set if the primary dimension is of time datatype.
+
+#### Available Columns [](timescaledb_information-chunks-available-columns)
+
+|Name|Description|
+|---|---|
+| `hypertable_schema` | Schema name of the hypertable. |
+| `hypertable_name` | Table name of the hypertable. |
+| `chunk_schema` | Schema name of the chunk. |
+| `chunk_name` | Name of the chunk. |
+| `primary_dimension` | Name of the column that is the primary dimension.|
+| `primary_dimension_type` | Type of the column that is the primary dimension.|
+| `range_start` | Start of the range for the chunk's dimension. |
+| `range_end` | End of the range for the chunk's dimension. |
+| `range_start_integer` | Start of the range for the chunk's dimension, if the dimension type is integer based |
+| `range_end_integer` | End of the range for the chunk's dimension, if the dimension type is integer based. |
+| `is_compressed` | Is the data in the chunk compressed?|
+| `chunk_tablespace` | Tablespace used by the chunk.|
+| `data_nodes` | Nodes on which the chunk is replicated. This is applicable only to chunks for distributed hypertables. |
+
+#### Sample Usage [](timescaledb_information-chunks-examples)
+
+Get information about the chunks of a hypertable.
 
 ```sql
-SELECT * FROM timescaledb_information.hypertable
-WHERE table_schema='public' AND table_name='metrics';
+CREATE TABLESPACE tablespace1 location '/usr/local/pgsql/data1';
+  
+CREATE TABLE hyper_int (a_col integer, b_col integer, c integer);
+SELECT table_name from create_hypertable('hyper_int', 'a_col', chunk_time_interval=> 10);
+CREATE OR REPLACE FUNCTION integer_now_hyper_int() returns int LANGUAGE SQL STABLE as $$ SELECT coalesce(max(a_col), 0) FROM hyper_int $$;
+SELECT set_integer_now_func('hyper_int', 'integer_now_hyper_int');
 
- table_schema | table_name | table_owner | num_dimensions | num_chunks | table_size | index_size | toast_size | total_size | distributed
---------------+------------+-------------+----------------+------------+------------+------------+------------+------------+--------------
- public       | metrics    | postgres    |              1 |          5 | 99 MB      | 96 MB      |            | 195 MB     | t
-(1 row)
+INSERT INTO hyper_int SELECT generate_series(1,5,1), 10, 50;
+
+SELECT attach_tablespace('tablespace1', 'hyper_int');
+INSERT INTO hyper_int VALUES( 25 , 14 , 20), ( 25, 15, 20), (25, 16, 20);
+
+SELECT * FROM timescaledb_information.chunks WHERE hypertable_name = 'hyper_int';
+ hypertable_schema | hypertable_name |     chunk_schema      |    chunk_name     | primary_di
+mension | primary_dimension_type | range_start | range_end | range_start_integer | range_end_
+integer | is_compressed | chunk_tablespace | data_nodes 
+-------------------+-----------------+-----------------------+-------------------+-----------
+--------+------------------------+-------------+-----------+---------------------+-----------
+--------+---------------+------------------+------------
+ public            | hyper_int       | _timescaledb_internal | _hyper_7_11_chunk | a_col     
+        | integer                |             |           |                   0 |           
+     10 | false         |                  | 
+ public            | hyper_int       | _timescaledb_internal | _hyper_7_12_chunk | a_col     
+        | integer                |             |           |                  20 |           
+     30 | false         | tablespace1      | 
+(2 rows)
+
 ```
-
-If you want to see the current interval length for your hypertables, you can
-check the `_timescaledb_catalog` as follows. Note that for time-based interval
-lengths, these are reported in microseconds.
-
-```sql
-SELECT h.table_name, c.interval_length FROM _timescaledb_catalog.dimension c
-  JOIN _timescaledb_catalog.hypertable h ON h.id = c.hypertable_id;
-
-table_name | interval_length
-------------+-----------------
-metrics       |    604800000000
-(1 row)
-```
-
 ## timescaledb_information.license [](timescaledb_information-license)
 
 Get information about current license.
